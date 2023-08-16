@@ -1,0 +1,87 @@
+import boto3
+from datetime import datetime, timedelta
+
+# Replace these values with your AWS credentials and ASG name
+aws_access_key = "YOUR_ACCESS_KEY"
+aws_secret_key = "YOUR_SECRET_KEY"
+region = "us-east-1"  # Change to your desired AWS region
+asg_name = "your-auto-scaling-group-name"
+
+# Create a Boto3 Auto Scaling client
+asg_client = boto3.client(
+    "autoscaling",
+    aws_access_key_id=aws_access_key,
+    aws_secret_access_key=aws_secret_key,
+    region_name=region
+)
+
+# Get the list of scheduled actions for the given ASG
+response = asg_client.describe_scheduled_actions(AutoScalingGroupName=asg_name)
+scheduled_actions = response["ScheduledUpdateGroupActions"]
+
+# Find the next scheduled action
+now = datetime.now()
+next_action = None
+min_time_difference = timedelta(days=365)  # Initialize with a large value
+
+for action in scheduled_actions:
+    scheduled_time = action["StartTime"]
+    time_difference = scheduled_time - now
+    if time_difference > timedelta(seconds=0) and time_difference < min_time_difference:
+        next_action = action
+        min_time_difference = time_difference
+
+# Calculate elapsed time
+if next_action:
+    elapsed_time = now - next_action["StartTime"]
+    hours, remainder = divmod(elapsed_time.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    elapsed_formatted = f"{hours:02}:{minutes:02}:{seconds:02}"
+    print(f"Next scheduled action: {next_action['ScheduledActionName']}")
+    print(f"Time elapsed since scheduled start: {elapsed_formatted}")
+else:
+    print("No upcoming scheduled actions found.")
+
+# Create a Boto3 CloudWatch client
+cloudwatch_client = boto3.client(
+    "cloudwatch",
+    aws_access_key_id=aws_access_key,
+    aws_secret_access_key=aws_secret_key,
+    region_name=region
+)
+
+# Get the current date in UTC
+current_date_utc = datetime.utcnow().date()
+
+# Set the start and end times for the current day in UTC
+start_time = datetime.combine(current_date_utc, datetime.min.time())
+end_time = datetime.combine(current_date_utc, datetime.max.time())
+
+# Get the metric statistics for instance launches and terminations
+response = cloudwatch_client.get_metric_statistics(
+    Namespace="AWS/AutoScaling",
+    MetricName="GroupTotalInstances",
+    Dimensions=[
+        {
+            "Name": "AutoScalingGroupName",
+            "Value": asg_name
+        },
+    ],
+    StartTime=start_time,
+    EndTime=end_time,
+    Period=86400,  # 1 day in seconds
+    Statistics=["Sum"],
+    Unit="Count"
+)
+
+# Extract the total instances launched and terminated
+total_instances_launched = 0
+total_instances_terminated = 0
+
+for datapoint in response["Datapoints"]:
+    if "Sum" in datapoint:
+        total_instances_launched += datapoint["Sum"]
+        total_instances_terminated += datapoint["Sum"]
+
+print(f"Total instances launched today: {int(total_instances_launched)}")
+print(f"Total instances terminated today: {int(total_instances_terminated)}")
